@@ -224,6 +224,29 @@
 - 具体改动：记录当前 SQLite 表/路径、客户端备份恢复调用链、小时统计/每日热门/在线离线/全局流量 JSON 写入、运行态分类、清理逻辑与 schema 草案。
 - 新 schema/行为变化：无；仅文档设计，不修改业务代码、不创建数据库表。
 - 测试命令及结果：未运行构建或测试；本轮为源码阅读和文档更新。
-- 未解决问题/风险：全仓其他模块、API/前端调用方及全部 JSON 文件路径尚需交叉核对；Schema 尚未定稿。
+- 未解决问题/风险：已核对核心存储 C 文件及主要 LuCI/ubus 历史查询路径；仍需对剩余模块做最终交叉搜索。Schema 尚未定稿。
 - 提交 SHA：`fd28258db41483046b7c2369dfad734625287528`（本次文档盘点提交）。
-- 下一步：完成仓库其余源码和调用方盘点，确认数据语义后再冻结 schema；之后进入统一存储层实现。
+- 下一步：结束剩余模块的持久化路径交叉检查，基于已确认的 API 查询/删除语义修订并冻结 schema；任务 1 完成后再进入统一存储层实现。
+
+
+### 10.6 LuCI / ubus 历史查询调用链补充（全仓首轮交叉核对）
+
+本轮继续核对了 `open-app-filter/src/fwx_ubus.c`、`luci-app-oaf/luasrc/controller/oaf_app_record.lua`、`oaf_user.lua`、`oaf_dashboard.lua` 和 `oaf_internet_audit.lua`：
+
+- 应用访问历史：LuCI `oaf_app_record.lua:get_app_history_records()` -> ubus `fwx/common` 的 `get_app_history_records` -> `fwx_api_get_app_history_records()`，直接查询 `<history_data_root>/client.db` 的 `app_visit_record`，支持 MAC、appid、起止时间和分页过滤。现有返回数据字段由 C API 组装，重构必须保持 API 响应形状。
+- 客户端小时历史：`get_hourly_stats` 的历史日期分支在 `fwx_ubus.c` 中直接读取 `client_data/<MAC>/stats/hourly_YYYY-MM-DD.json`；当天分支则读内存结构。因此虽然 `load_history_stat_from_file()` 是空实现，历史 API 本身仍依赖 JSON 文件。
+- 客户端每日热门应用历史：对应 API 的历史日期分支直接读取 `top_apps_YYYY-MM-DD.json`；当天分支读内存结构。迁移时需要将该 API 历史分支改为 SQL 查询，不能只改写入函数。
+- 全局小时流量历史：`get_global_traffic_stats` 的历史日期分支直接读取 `global/stats/traffic_YYYY-MM-DD.json`；`get_history_traffic_stats` 按天汇总历史 JSON 文件并合并当天内存统计。两条 API 都必须迁移到 SQLite。
+- 全局应用类型统计 API `get_global_app_type_stats` 目前从内存的日累计数组或近一小时事件链表生成响应，没有从历史 JSON/数据库恢复的路径。是否需要跨重启历史仍是产品语义决策。
+- LuCI 的 `set_record_base` 会更新 UCI 中的 `history_data_path`、`base_data_path`、保留天数和大小配置；`fwx_ubus.c` 现有路径变更逻辑会移动旧目录及 `client.db`。新版数据库路径切换行为必须保留或明确重设计，不能遗漏。
+- 记录清理 API 会按 MAC、日期范围和类型（visits/stats/all）删除数据；当前访问记录 SQL 删除与统计 JSON 文件删除混合在 `delete_client_record_files()` 中。迁移后必须保持该 API 的参数/响应契约，并把所有删除范围落实到数据库表。
+- 现有清理/重置 API 还会移除客户端数据、备份和全局目录，并清空访问记录表。重构时需明确“清空历史数据”与“删除客户端资料”是否是不同操作，避免误删配置或其他运行文件。
+
+### 10.7 其他文件型数据分类补充
+
+- `/etc/board.json`、功能识别/升级状态文件、feature 列表缓存等属于系统能力发现、升级流程或缓存，不属于客户端历史业务统计；应保持各自文件接口，除非另有独立需求。
+- UCI 配置（例如 `fwx.config`、`fwx_record`）继续作为配置来源，不迁入业务数据库。
+- `/tmp/record_whitelist_state`、`/tmp/appfilter_rules_state`、`/tmp/appfilter_whitelist_state`、`/tmp/fwx_cache/user_parental_control_detail.json` 属于运行状态标记或临时缓存；本轮没有证据表明它们是需要统一保留的历史业务数据。
+- `/proc/net/af_visit`、`/proc/net/af_client`、`/proc/net/af_active_app`、`/tmp/dhcp.leases` 和 `/tmp/visit_list`、`/tmp/dev_list` 是运行时输入、内核接口或 IPC/诊断接口，不纳入业务 SQLite。
+- 因此“所有持久化业务数据统一 SQLite”应覆盖客户端备份、访问历史、客户端统计、在线/离线事件、全局流量历史及经需求确认的全局汇总；不等于把配置、升级产物、日志、缓存、IPC 和系统状态文件一并迁入。
+
