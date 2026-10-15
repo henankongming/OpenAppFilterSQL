@@ -69,7 +69,7 @@
 
 ### 阶段 A：盘点和设计（尚未完成）
 
-- [ ] 全仓搜索 JSON 文件创建、读取、更新、删除和目录遍历逻辑（已完成核心文件首轮盘点，其他目录仍需交叉核对）。
+- [ ] 全仓搜索 JSON 文件创建、读取、更新、删除和目录遍历逻辑（已对主要 C 模块、内核侧源码和规则脚本进行第二轮筛查；仍需最终核对剩余源码、Lua 控制器与所有调用方）。
 - [x] 核心文件首轮确认 SQLite 打开、建表、读写、清理逻辑及数据库路径；全仓连接生命周期盘点仍待完成。
 - [x] 对核心文件中已发现的数据类型标记业务含义、写入时机、读取入口、保留策略及重启恢复行为（见下文首轮盘点）；全仓复核仍待完成。
 - [x] 确认核心文件中 `hourly_*.json`、`top_apps_*.json`、`client.json`、`online_offline_*.json`、全局流量文件及访问记录 DB 的主要调用链；其他源码调用方仍待全仓复核。
@@ -208,10 +208,10 @@
 
 ### 10.4 待核实问题（进入重构前必须完成）
 
-- [ ] 交叉搜索仓库中其他源码、LuCI/ubus API、脚本及构建文件里的 JSON 读写、目录遍历、数据库打开和历史统计调用方。
-- [ ] 核对所有历史查询 API 的响应结构，确认统计数据字段与当前前端依赖。
-- [ ] 确认 `online_offline_*.json` 是否有外部读取者，是否需要跨重启查询。
-- [ ] 确认 `client.json` 中 `online_session` 和当天统计快照哪些字段必须恢复，避免恢复过期实时状态或重复累计。
+- [ ] 交叉搜索仓库中其他源码、LuCI/ubus API、脚本及构建文件里的 JSON 读写、目录遍历、数据库打开和历史统计调用方（第二轮已覆盖主要 C 模块、功能更新模块、内核侧 JSON 输出和规则脚本；仍需最终全仓复核）。
+- [ ] 核对所有历史查询 API 的响应结构，确认统计数据字段与当前前端依赖（已确认小时统计、每日热门、全局流量的主要字段；仍需核对剩余调用方及边界行为）。
+- [ ] 确认 `online_offline_*.json` 是否有外部读取者，是否需要跨重启查询（在已扫描的 C/Lua 代码中找到归档写入与过期内存事件删除，未发现对应历史读取 API；外部调用者仍待确认）。
+- [ ] 确认 `client.json` 中 `online_session` 和当天统计快照哪些字段必须恢复，避免恢复过期实时状态或重复累计（已核对序列化/反序列化字段；启动加载先重置部分运行态字段，再恢复 session 与当日聚合快照，重启后累计语义仍需产品决策）。
 - [ ] 明确 `record_time`、`history_data_size` 的现有用户可见语义，以及数据库超过上限后的可预测策略。
 - [ ] 确认是否需要持久化全局每日应用类型统计；小时事件链表看起来是短期内存态。
 - [ ] 根据 API 查询和删除场景最终确定索引、外键策略、唯一约束与删除级联行为。
@@ -283,3 +283,43 @@
 - 建议后续 AI 首先通读本文第 10 节，逐项处理第 10.4、10.8 节的未完成项；确认数据字段和 API 契约后再冻结 Schema，并按阶段一次实现一个可验证的改动。不要实现旧 JSON 导入或读取兼容层，因为项目目标已明确排除该需求。
 
 **交接状态：任务 1（持久化盘点与 Schema 设计）仍进行中；本会话无业务代码改动。**
+
+
+### 10.10 第二轮跨模块存储审计（2026-10-15）
+
+> 本轮范围：在核心用户/ubus 文件之外，筛查服务端其他 C 模块、功能更新流程、内核侧源码及规则脚本中的文件访问、JSON 序列化、目录遍历与 SQLite 调用。该轮提高了覆盖面，但尚不将其描述为全仓最终审计。
+
+#### 新确认的非业务历史文件
+
+- `open-app-filter/src/fwx_app_filter.c`、`fwx_mac_filter.c`、`fwx_record.c` 中的 `/tmp/appfilter_rules_state`、`/tmp/appfilter_whitelist_state`、`/tmp/macfilter_rules_state`、`/tmp/macfilter_whitelist_state`、`/tmp/record_whitelist_state` 是规则/白名单变更标记文件，内容是简单状态值，不属于历史统计数据。
+- `open-app-filter/src/main.c` 写入功能升级状态与功能信息文件；`fwx_feature_online.c` 写入在线更新状态、临时下载/归档文件，并读取 `/etc/board.json` 与功能列表缓存。它们服务于系统能力发现、升级和状态展示，不应因统一业务数据库而迁入 SQLite。
+- `fwx_stat.c` 的连接数来自 `/proc/sys/net/netfilter/nf_conntrack_count`，会话曲线使用固定大小的内存环形缓冲区；本轮未发现其业务历史持久化需求。
+- `open-app-filter/src/fwx_utils.c` 对 `/dev/fwx` 的文件访问是设备接口；`/tmp/dhcp.leases`、`/proc/net/af_client` 等是系统输入。它们都不是业务历史存储。
+- `open-app-filter/files/rule_manager.lua` 中的 `/tmp/fwx_cache/user_parental_control_detail.json` 是家长控制规则详情缓存；其他规则脚本的 JSON 多用于 UBUS 请求/响应或状态缓存。UCI 规则和白名单仍以配置包为准，不迁入历史业务库。
+- 内核侧 `oaf/src/fwx_client.c` 的 JSON 构造用于运行态客户端/访问信息输出，不是独立的历史归档数据库。内核 proc 接口与用户态 IPC 输出必须保持原有协议。
+
+#### 历史统计字段与 API 契约补充
+
+- 客户端小时历史文件 `hourly_YYYY-MM-DD.json` 的顶层字段为 `date`、`mac`、`hourly_stats`。数组包含 24 个小时对象：`hour`、`apps`（最多 `TOP_APP_PER_HOUR` 个 app，含 `appid`，可能带 `name`/`icon`）、`traffic.up_bytes`、`traffic.down_bytes`、`online_time`、`active_time`。流量单位是字节，时间字段是秒。
+- 每日热门应用文件 `top_apps_YYYY-MM-DD.json` 包含 `date`、`mac`、`count`、`apps`；每项包含 `appid`、`total_time`，可能包含展示用的 `name`/`icon`。持久化时长单位为秒；应用名称与图标缺失标记可在查询时根据应用目录动态生成，不宜作为统计事实重复存储。
+- 全局流量文件 `traffic_YYYY-MM-DD.json` 包含 `date` 和 `hourly_traffic`，每小时含 `hour` 及 `traffic.up_bytes/down_bytes`。历史 API `get_global_traffic_stats` 以 `date`、`is_today`、`hourly_traffic` 返回数据；`get_history_traffic_stats` 另会跨日期汇总。SQL 迁移必须保持这两个 API 的响应字段和日期范围语义。
+- `get_hourly_stats`、`get_top_apps_stats` 的当天分支取内存聚合，历史分支取文件；迁移后应只替换历史数据来源，不改变返回的 `mac/date/is_today/hourly_stats/count/apps` 等字段结构。
+- 应用访问记录查询使用可选 MAC、appid、起止时间和分页条件，按 `end_time DESC, duration ASC` 排序。Schema 索引需以这些实际 where/order by 组合为依据；目前不能只依赖现有的 `record_date` 索引来断言所有历史查询都已优化。
+- `online_offline_YYYY-MM-DD.json` 由内存链表归档，记录字段为 `type`、`timestamp`、`duration`；归档后会删除早于当天的内存事件。已扫描的历史 API 代码未发现该 JSON 的读取入口，但尚不能排除其他进程或外部脚本读取，因此需继续确认产品是否要求历史查询/跨重启保留。
+- 客户端备份当前包含 `online_session`（上下行字节、在线/活跃时长、最近应用、开始时间）、`daily_stats` 和 `daily_top_apps_stats`。启动加载会先调用 `reset_client_runtime_fields()`，再恢复这些字段。目标库应区分跨重启累计快照与瞬时在线/速率/URL 状态；是否恢复跨重启的当前会话及如何避免重启时长重复累计仍需定稿。
+
+#### 路径配置与清理语义风险
+
+- 当前 `base_data_path` 主要控制 `client_data`/`client_backup`，而 `history_data_path` 控制 `global` 和 `client.db`；`set_record_base` 在路径变更时分别移动两组数据，并重置路径缓存。统一数据库后必须明确数据库的唯一位置及两个现有 UCI 路径字段的行为，不可简单忽略其中一个设置。
+- `record_time` 以天为单位用于过期历史清理；`history_data_size` 当前主要作用于访问记录数据库大小控制。新版应把保留期与容量上限分开定义，并为所有历史表明确哪些数据按日期删除。
+- 当前 `clean_all_data` 会清空数据库中所有非 SQLite 系统表，并清理客户端/全局目录。若加入 `schema_migrations` 或其他数据库元数据表，新清理逻辑必须保留 schema 版本元数据，仅清理业务数据；客户端资料删除、历史清空和配置保留也需要区分。
+- 访问记录表没有唯一约束；归档逻辑按 MAC + 日期替换数据，而单条记录查询 API 支持同一时间段内多条记录。不能在未证明业务唯一性的情况下对访问事件设置可能丢失合法数据的唯一键。
+- 设备本地日界线仍由 `localtime()/mktime()` 定义。以 Unix 秒存储日期时，应使用当地日零点时间戳，不能把它当作 UTC 日期或固定 86400 秒间隔来处理跨夏令时地区；按日循环清理也需使用本地日历递增以避免边界偏差。
+
+#### 本轮状态
+
+- 结果：新增了非业务 JSON/文件的分类、统计 JSON 字段契约、访问查询排序、路径双根配置及全量清理与 schema 元数据之间的风险记录。
+- 业务代码：未修改。
+- 测试：未运行构建、单元测试或设备测试。
+- 仍未完成：剩余源码/LuCI 控制器和脚本最终复核；online/offline 事件的外部读取需求；客户端会话恢复语义；全局每日应用类型统计的持久化需求；UCI 双路径映射；保留期/容量策略；最终索引/约束/级联策略。
+- 下一步：继续完成剩余调用方复核与语义决策，再冻结 schema；任务 1 未完成前不开始统一存储层业务代码改造。
