@@ -355,3 +355,31 @@
 - 最近一次已知文档提交：`a2a90a67d51e7f7ffb2fabe7a7ff8331b951d7fe`。本节是本次准备追加的交接记录，提交完成后应以工具返回的实际 SHA 为准。
 
 **交接指令：从上面的未完成清单继续，先做证据驱动的剩余调用方审计与语义决策。不要重复已完成的核心盘点，也不要在任务 1 完成前提前大规模修改业务存储代码。**
+
+
+### 10.12 实际代码改动：统一访问记录 DB 初始化入口（2026-10-15）
+
+#### 改动目的
+
+在继续盘点过程中发现，`open-app-filter/src/fwx_user.c` 的 `open_client_visit_db()` 已负责打开 `client.db`、创建 `app_visit_record` 表并维护日期/MAC 日期索引；但 `open-app-filter/src/fwx_ubus.c` 的历史访问查询函数又重复执行了一次不完整的 `CREATE TABLE IF NOT EXISTS app_visit_record`。这种重复定义会让 schema 维护分散，未来修改字段或索引时容易产生漂移。
+
+#### 已提交代码
+
+- [x] 将 `open_client_visit_db(sqlite3 **db)` 从 `fwx_user.c` 的文件内静态函数提升为模块内共享函数。
+- [x] 在 `fwx_user.h` 声明共享函数，并显式包含 `sqlite3.h` 以保证 `sqlite3 **` 声明有类型定义。
+- [x] 修改 `fwx_ubus.c` 的历史访问记录查询路径：保留“数据库文件不存在时返回空结果”的既有分支；文件存在时改用共享 DB opener，不再在查询函数中单独创建一份表结构。
+- [x] 复查更新后的 `fwx_ubus.c`，确认原有重复的 `CREATE TABLE IF NOT EXISTS app_visit_record` 片段已移除，查询路径调用 `open_client_visit_db(&db)`。
+
+#### 文件和提交
+
+- `open-app-filter/src/fwx_user.c`：`600bf824560ec2ea7449d6ddc1266468279c29e0`
+- `open-app-filter/src/fwx_user.h`：共享函数声明 `dbd94d33240b7b5fe411b69d3552d9d75663d5e0`，SQLite 头文件依赖补充 `bd9ea14ac5736005f925e066cf0f34be8b03b146`
+- `open-app-filter/src/fwx_ubus.c`：`85f290ec745d9e0d3b552272f10613140b59ccfb`
+
+#### 验证和限制
+
+- 已通过 GitHub 文件回读确认 `fwx_ubus.c` 中重复建表语句不存在，且共享初始化函数调用存在。
+- 未运行编译、静态分析、单元测试或设备测试；因此目前只确认源码文本层面的改动，不宣称构建通过。
+- 这是一项范围有限的存储初始化去重，不代表统一 SQLite schema 已实现或任务 1 已完成。全仓审计、schema 定稿及其他业务 JSON 读写迁移仍未完成。
+
+**下一步：** 继续核对剩余源码/LuCI/脚本的持久化调用方与 API 契约；等 schema 设计有证据支撑后，再推进下一项存储代码改造。
