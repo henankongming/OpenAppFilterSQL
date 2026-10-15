@@ -3286,26 +3286,15 @@ struct json_object *fwx_api_get_app_history_records(struct json_object *req_obj)
         return fwx_gen_api_response_data(API_CODE_SUCCESS, data_obj);
     }
 
-    rc = sqlite3_open(db_path, &db);
-    if (rc != SQLITE_OK) {
-        if (db)
-            sqlite3_close(db);
+    /*
+     * Keep schema creation and index management in the shared storage helper.
+     * Do not maintain a second, partial app_visit_record schema here.
+     */
+    if (open_client_visit_db(&db) != 0) {
         json_object_put(data_obj);
         json_object_put(list_obj);
         return fwx_gen_api_response_data(API_CODE_ERROR, NULL);
     }
-
-    sqlite3_exec(db,
-                 "CREATE TABLE IF NOT EXISTS app_visit_record ("
-                 "mac TEXT NOT NULL,"
-                 "record_date INTEGER NOT NULL,"
-                 "appid INTEGER NOT NULL,"
-                 "start_time INTEGER NOT NULL,"
-                 "end_time INTEGER NOT NULL,"
-                 "duration INTEGER NOT NULL,"
-                 "action INTEGER NOT NULL"
-                 ");",
-                 NULL, NULL, NULL);
 
     if (mac) {
         strncat(where_sql, " AND mac = ?", sizeof(where_sql) - strlen(where_sql) - 1);
