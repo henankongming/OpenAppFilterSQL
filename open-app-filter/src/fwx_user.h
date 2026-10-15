@@ -3,6 +3,7 @@
  * Copyright(c) 2026 destan19(TT) <www.fanchmwrt.com>  
 */
 #include <sys/types.h>
+#include <sqlite3.h>
 #include <libubox/list.h>
 #ifndef __FILTER_USER_H__
 #define __FILTER_USER_H__
