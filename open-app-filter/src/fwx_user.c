@@ -73,7 +73,7 @@ static void build_client_backup_file_path(const char *mac, char *file_path, size
 static int load_client_backup_from_file(const char *file_path);
 static u_int32_t get_today_start_timestamp_from_ts(u_int32_t timestamp);
 static void build_client_visit_db_path(char *db_path, size_t len);
-static int open_client_visit_db(sqlite3 **db);
+int open_client_visit_db(sqlite3 **db);
 static int save_visit_record_to_db(const char *mac, visit_info_t *visit);
 static int find_oldest_date_in_visit_db(char *oldest_date, size_t len);
 static int delete_visit_records_by_date(const char *date_str);
@@ -825,7 +825,7 @@ static void build_client_visit_db_path(char *db_path, size_t len) {
     snprintf(db_path, len, "%s/client.db", get_history_data_root_dir());
 }
 
-static int open_client_visit_db(sqlite3 **db) {
+int open_client_visit_db(sqlite3 **db) {
     char db_path[512] = {0};
     int rc = SQLITE_OK;
 
